@@ -1,4 +1,4 @@
-import { appendEntry, getSpreadsheet, getTableData, initializeGoogle, parseSpreadsheetId, signIn, signOut, validateHeaders } from "./google";
+import { appendEntry, getSpreadsheet, getTableData, initializeGoogle, pickSpreadsheet, signIn, signOut, validateHeaders } from "./google";
 import type { TableLink } from "./types";
 import "./style.css";
 
@@ -20,6 +20,8 @@ let generation = 0;
 let signingIn = false;
 let sessionGeneration = 0;
 const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+const apiKey = import.meta.env.VITE_GOOGLE_API_KEY || "";
+const appId = import.meta.env.VITE_GOOGLE_APP_ID || "";
 
 interface BeforeInstallPromptEvent extends Event {
     prompt(): Promise<void>;
@@ -77,7 +79,7 @@ function render(): void {
     <main><section class="intro"><p class="eyebrow">YOUR SHEETS, READY WHEN YOU ARE</p><h1>A quick form for<br class="desktop-break"> the things worth noting.</h1><p class="subhead">Connect a spreadsheet and add entries without opening a grid.</p></section>
     <section class="workspace" aria-label="Sheet entry workspace"><aside class="sidebar"><div class="section-heading"><div><p class="eyebrow">YOUR WORKSPACE</p><h2>Linked sheets</h2></div><span class="count">${links.length}</span></div>
     ${links.length ? `<ul class="link-list">${links.map((item) => `<li><button class="link-item ${item.id === selectedId ? "active" : ""}" type="button" data-select="${escapeHtml(item.id)}" ${writing || loading ? "disabled" : ""}><span class="sheet-icon" aria-hidden="true">▤</span><span class="link-copy"><strong>${escapeHtml(item.spreadsheetTitle)}</strong><small>${escapeHtml(item.tabTitle)}</small></span><span class="arrow" aria-hidden="true">›</span></button><button class="remove" type="button" data-remove="${escapeHtml(item.id)}" aria-label="Remove ${escapeHtml(item.spreadsheetTitle)} — ${escapeHtml(item.tabTitle)}" ${writing ? "disabled" : ""}>×</button></li>`).join("")}</ul>` : `<div class="empty-links"><span class="empty-icon">＋</span><p>No sheets linked yet.</p><small>Add a spreadsheet below to get started.</small></div>`}
-    <form id="link-form" class="link-form"><label for="sheet-url">Add a spreadsheet</label><p class="hint">Paste its Google Sheets URL or ID.</p><input id="sheet-url" name="url" type="text" autocomplete="url" placeholder="https://docs.google.com/…" required ${busyLink || writing ? "disabled" : ""}><button class="button button-primary full" type="submit" ${busyLink || writing || !signedIn || !isOnline ? "disabled" : ""}>${busyLink ? "Looking up sheet…" : "Find spreadsheet"}</button></form><p class="sidebar-note">You need edit access to submit entries.</p></aside>
+    <div class="link-form"><label>Add a spreadsheet</label><p class="hint">Choose one Google Sheets file. Access is requested per file.</p><button class="button button-primary full picker-button" type="button" ${busyLink || writing || !signedIn || !isOnline || !apiKey || !appId ? "disabled" : ""}>${busyLink ? "Opening spreadsheet picker…" : "Choose spreadsheet"}</button>${!apiKey || !appId ? '<p class="hint">Set VITE_GOOGLE_API_KEY and VITE_GOOGLE_APP_ID in .env.local, then restart the app.</p>' : ""}</div><p class="sidebar-note">You need edit access to submit entries.</p></aside>
     <section class="form-panel" aria-label="Entry form" aria-busy="${loading || writing}">${link ? `<div class="form-heading"><div><p class="eyebrow">${escapeHtml(link.spreadsheetTitle)}</p><h2>${escapeHtml(link.tabTitle)}</h2></div><button class="button button-quiet refresh" type="button" ${loading || writing || !isOnline ? "disabled" : ""} aria-label="Refresh sheet headers and suggestions">↻ <span>Refresh</span></button></div><div id="form-content">${loading ? '<div class="loading"><span class="spinner"></span><p>Loading your sheet…</p></div>' : headersError ? `<div class="state-card"><span class="state-icon">!</span><h3>Sheet needs a quick fix</h3><p>${escapeHtml(headersError)}</p><button class="button button-quiet refresh" type="button" ${!isOnline ? "disabled" : ""}>Refresh sheet</button></div>` : data && fields.length ? `<form id="entry-form" novalidate><div class="fields">${fields.map(({ header, index }) => `<div class="field"><label for="field-${index}">${escapeHtml(header)}</label><input id="field-${index}" name="field-${index}" type="text" autocomplete="off" list="suggestions-${index}" placeholder="Enter ${escapeHtml(header.toLocaleLowerCase())}" value="${escapeHtml(submittedValues?.[index] ?? "")}" ${writing ? "disabled" : ""}><datalist id="suggestions-${index}">${suggestions(index).map((value) => `<option value="${escapeHtml(value)}"></option>`).join("")}</datalist></div>`).join("")}</div><p class="timestamp-note"><span aria-hidden="true">◷</span> Timestamp is added automatically when you save.</p><button class="button button-primary submit" type="submit" ${writing || !isOnline ? "disabled" : ""}>${writing ? '<span class="spinner small"></span> Saving…' : 'Save entry <span aria-hidden="true">→</span>'}</button></form>` : '<div class="state-card"><span class="state-icon">✎</span><h3>No entry fields</h3><p>Add at least one column besides Timestamp to your sheet, then refresh.</p></div>'}</div>` : `<div class="welcome"><div class="welcome-art" aria-hidden="true"><span>✳</span><span>▤</span><span>✦</span></div><p class="eyebrow">A LITTLE LESS SPREADSHEET</p><h2>Your next note<br>starts here.</h2><p>Sign in, then link a sheet to build a simple entry form from its column headers.</p><button class="button button-primary welcome-signin" type="button" ${!clientId ? "disabled" : ""}>Sign in with Google</button></div>`}</section></section>
     ${status ? `<div class="notice ${escapeHtml(statusKind)}" role="${statusKind === "error" ? "alert" : "status"}"><span>${statusKind === "error" ? "!" : "•"}</span><p>${escapeHtml(status)}</p><button class="notice-close" type="button" aria-label="Dismiss message">×</button></div>` : ""}
     <p class="install-hint">${!installPrompt ? "Tip: use your browser menu to install Sheetnote on Android or Windows." : ""}</p></main><footer><span>Sheetnote</span><span>Your sheet data stays in Google Sheets. Only link details are saved on this device.</span></footer>`;
@@ -95,10 +97,7 @@ function bind(): void {
     app.querySelectorAll<HTMLButtonElement>("[data-select]").forEach((button) => button.addEventListener("click", () => selectLink(button.dataset.select!)));
     app.querySelectorAll<HTMLButtonElement>("[data-remove]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.remove!)));
     app.querySelectorAll<HTMLButtonElement>(".refresh").forEach((button) => button.addEventListener("click", refresh));
-    app.querySelector<HTMLFormElement>("#link-form")?.addEventListener("submit", (event) => {
-        event.preventDefault();
-        void linkSheet(new FormData(event.currentTarget as HTMLFormElement).get("url") as string);
-    });
+    app.querySelector<HTMLButtonElement>(".picker-button")?.addEventListener("click", () => void linkSheet());
     app.querySelector<HTMLFormElement>("#entry-form")?.addEventListener("submit", submitEntry);
 }
 
@@ -143,16 +142,19 @@ async function doSignOut(): Promise<void> {
     }
 }
 
-async function linkSheet(input: string): Promise<void> {
-    if (!isOnline) return notice("Connect to the internet to look up a spreadsheet.", "error");
+async function linkSheet(): Promise<void> {
+    if (!isOnline) return notice("Connect to the internet to choose a spreadsheet.", "error");
     const generationAtStart = generation;
     const sessionAtStart = sessionGeneration;
     if (!signedIn) return notice("Sign in to connect a spreadsheet.", "error");
+    if (busyLink) return;
     busyLink = true;
     status = "";
     render();
     try {
-        const id = parseSpreadsheetId(input);
+        const id = await pickSpreadsheet(apiKey, appId);
+        if (!id) return;
+        if (generationAtStart !== generation || sessionAtStart !== sessionGeneration) return;
         const info = await getSpreadsheet(id);
         if (generationAtStart !== generation || sessionAtStart !== sessionGeneration) return;
         if (!info.tabs.length) throw new Error("No tabs were found in this spreadsheet.");
@@ -164,11 +166,13 @@ async function linkSheet(input: string): Promise<void> {
         selectedId = item.id;
         await loadSelected();
     } catch (error) {
-        if (generationAtStart === generation && sessionAtStart === sessionGeneration) notice(error instanceof Error ? error.message : "Could not find that spreadsheet. Check the URL and your access.", "error");
+        if (generationAtStart === generation && sessionAtStart === sessionGeneration) notice(error instanceof Error ? "The Google service could not complete this request. Check your access and try again." : "Could not choose that spreadsheet. Check your access and try again.", "error");
     }
     finally {
-        busyLink = false;
-        render();
+        if (sessionAtStart === sessionGeneration) {
+            busyLink = false;
+            render();
+        }
     }
 }
 
