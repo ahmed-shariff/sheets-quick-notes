@@ -20,7 +20,7 @@ function readTable(id, tabId) {
   const rows = count ? sheet.getRange(2, 1, count, width).getDisplayValues() : [];
   return { headers, rows };
 }
-function appendEntry(id, tabId, expectedHeaders, values) {
+function appendEntry(id, tabId, expectedHeaders, values, timeZone) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) throw new Error('Another save is in progress. Try again.');
   try {
@@ -32,7 +32,13 @@ function appendEntry(id, tabId, expectedHeaders, values) {
   validateHeaders_(actual);
   if (JSON.stringify(actual) !== JSON.stringify(expectedHeaders)) throw new Error('Sheet headers changed. Refresh before saving.');
   const timestamp = actual.findIndex(h => h.trim().toLowerCase() === 'timestamp');
-  const row = values.map((v, i) => i === timestamp ? new Date().toISOString() : v);
+  if (typeof timeZone !== 'string' || !timeZone.trim() || timeZone.length > 100) timeZone = 'Etc/UTC';
+  const now = new Date();
+  let localTimestamp;
+  try { localTimestamp = Utilities.formatDate(now, timeZone, "yyyy-MM-dd'T'HH:mm:ss.SSSZ"); }
+  catch { localTimestamp = Utilities.formatDate(now, 'Etc/UTC', "yyyy-MM-dd'T'HH:mm:ss.SSSZ"); }
+  localTimestamp = localTimestamp.replace(/([+-][0-9]{2})([0-9]{2})$/, '$1:$2');
+  const row = values.map((v, i) => i === timestamp ? localTimestamp : v);
     // Prefix every non-timestamp string; leading whitespace/control characters and apostrophes cannot bypass this text-entry escape.
     sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setValues([row.map((v, i) => i !== timestamp ? "'" + v : v)]);
     return { ok: true };
