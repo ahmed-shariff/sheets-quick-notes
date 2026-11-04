@@ -1,5 +1,7 @@
 # Sheetnote
 
+[Open Sheetnote](https://script.google.com/macros/s/AKfycbxUtdYDG0ryBPERVRej-Z4SVSZW2giSbwaW3QkYNujYnNHOrdKtIHJP6lVbi7YS2rw7KA/exec)
+
 Sheetnote is a Google Apps Script web app that builds quick entry forms from Google Sheets tabs. The Apps Script server opens and edits spreadsheets as the user accessing the deployed app. **Never deploy this shared app to execute as its owner**: that would let visitors write with the owner's authority.
 
 ## Build and deploy
