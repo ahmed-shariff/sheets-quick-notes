@@ -254,7 +254,7 @@ function stringCell(value: unknown): string {
 }
 
 export async function getTableData(spreadsheetId: string, tabTitle: string): Promise<TableData> {
-    const range = `${quoteTabTitle(tabTitle)}!1:ZZZ`, result = await sheetsRequest<SheetsValues>(`${SHEETS_API}/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`);
+    const range = `${quoteTabTitle(tabTitle)}!A:ZZZ`, result = await sheetsRequest<SheetsValues>(`${SHEETS_API}/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS`);
     const values = result.values || [], headers = (values[0] || []).map(stringCell), width = headers.length;
     const rows = values.slice(1).map((row) => Array.from({ length: width }, (_, i) => stringCell(row[i])));
     while (rows.length && rows[rows.length - 1].every((cell) => cell === "")) rows.pop();

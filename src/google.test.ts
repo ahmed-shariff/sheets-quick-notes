@@ -34,7 +34,7 @@ describe("Google Sheets integration", () => {
     const { clients } = setup(); await initialize(); const auth = signIn(); clients[0].callback({ access_token: "token", expires_in: "3600" }); await auth;
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ values: [["Title", "Timestamp"], ["Prior", "2024"]] }), { status: 200 })); vi.stubGlobal("fetch", fetchMock);
     expect(await getTableData("spreadsheet", "O'Brien")).toEqual({ headers: ["Title", "Timestamp"], rows: [["Prior", "2024"]] });
-    expect(decodeURIComponent(String(fetchMock.mock.calls[0][0]))).toContain("'O''Brien'!1:ZZZ");
+    expect(decodeURIComponent(String(fetchMock.mock.calls[0][0]))).toContain("'O''Brien'!A:ZZZ");
   });
   it("surfaces API errors without retries", async () => {
     const { clients } = setup(); await initialize(); const auth = signIn(); clients[0].callback({ access_token: "token", expires_in: "3600" }); await auth;
