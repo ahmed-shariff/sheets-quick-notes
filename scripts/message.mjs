@@ -1,0 +1,1 @@
+console.log(process.argv[2] === 'dev' ? 'This project runs as a Google Apps Script web app. Build with npm run build and deploy dist/; see README.md.' : 'No browser preview: the Apps Script runtime is required. Deploy dist/ to test.');

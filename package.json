@@ -4,10 +4,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "test": "vitest run",
-    "preview": "vite preview"
+    "dev": "node scripts/message.mjs dev",
+    "build": "node scripts/build-gas.mjs",
+    "test": "node --test tests/*.test.mjs && node scripts/test-build.mjs",
+    "preview": "node scripts/message.mjs preview"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

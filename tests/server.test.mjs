@@ -1,0 +1,17 @@
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+function setup({ headers=['Timestamp','Name'], rows=[] }={}) {
+  const props = new Map(); let releases=0, lockThrows=false;
+  const sheet={getSheetId:()=>7,getName:()=> 'Tab',getLastColumn:()=>headers.length,getLastRow:()=>rows.length+1,
+    getRange(r,_c,n,w){return {getDisplayValues:()=>r===1?[headers.slice(0,w)]:rows.map(x=>x.slice(0,w)),setValues(v){if(lockThrows)throw Error('write failure'); rows.push(v[0]);}}}};
+  const ss={getId:()=> 'abc',getName:()=> 'Book',getSheets:()=>[sheet]};
+  const context={SpreadsheetApp:{openById:()=>ss},PropertiesService:{getUserProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},Utilities:{getUuid:()=>`uuid-${Math.random()}`},LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock:()=>releases++})},Date};
+  vm.createContext(context); return readFile(new URL('../gas/Code.gs',import.meta.url),'utf8').then(code=>{vm.runInContext(code,context);return {context,headers,rows,released:()=>releases,failWrite:()=>lockThrows=true};});
+}
+test('bootstrap has stable opaque per-user namespace; spreadsheet and tabs are enumerated',async()=>{const {context}=await setup();const a=context.bootstrap(),b=context.bootstrap();assert.equal(a.namespace,b.namespace);assert.match(a.namespace,/^uuid-/);assert.deepEqual(JSON.parse(JSON.stringify(context.getSpreadsheet('abc'))),{id:'abc',title:'Book',tabs:[{id:7,title:'Tab'}]});});
+test('reads headers and rows; rejects empty or malformed header schemas',async()=>{const x=await setup({rows:[['2025','A']]});assert.deepEqual(JSON.parse(JSON.stringify(x.context.readTable('abc',7))),{headers:['Timestamp','Name'],rows:[['2025','A']]});const y=await setup({headers:[]});assert.throws(()=>y.context.readTable('abc',7),/Headers/);const z=await setup({headers:['Timestamp','timestamp']});assert.throws(()=>z.context.readTable('abc',7),/Headers/);});
+test('rechecks schema while locked and prefixes every non-timestamp value with a text escape',async()=>{const x=await setup();assert.throws(()=>x.context.appendEntry('abc',7,['Timestamp','Old'],['','x']),/changed/);assert.equal(x.rows.length,0);const before=Date.now();x.context.appendEntry('abc',7,['Timestamp','Name'],['ignored','=1+1']);assert.equal(x.rows.length,1);assert.ok(Date.parse(x.rows[0][0])>=before);assert.equal(x.rows[0][1],"'=1+1");x.context.appendEntry('abc',7,['Timestamp','Name'],['ignored',' \\t=1+1']);assert.equal(x.rows[1][1],"' \\t=1+1");x.context.appendEntry('abc',7,['Timestamp','Name'],['ignored',"'=1+1"]);assert.equal(x.rows[2][1],"''=1+1");assert.equal(x.released(),4);});
+test('lock releases on validation and write failures',async()=>{const x=await setup();assert.throws(()=>x.context.appendEntry('abc',7,['Timestamp','Name'],['only']),/Invalid entry/);x.failWrite();assert.throws(()=>x.context.appendEntry('abc',7,['Timestamp','Name'],['','x']),/write failure/);assert.equal(x.released(),2);});
