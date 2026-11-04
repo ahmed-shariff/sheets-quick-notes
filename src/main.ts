@@ -17,6 +17,8 @@ let isOnline = navigator.onLine;
 let installPrompt: BeforeInstallPromptEvent | null = null;
 let submittedValues: string[] | null = null;
 let generation = 0;
+let signingIn = false;
+let sessionGeneration = 0;
 const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 
 interface BeforeInstallPromptEvent extends Event { prompt(): Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }>; }
@@ -45,7 +47,7 @@ function render(): void {
   const suggestions = (index: number) => [...new Set((data?.rows ?? []).map((row) => row[index] ?? "").filter((value) => value.trim()))];
   const onlineText = isOnline ? "Online" : "Offline — viewing only";
   app.innerHTML = `
-    <header class="topbar"><a class="brand" href="#" aria-label="Sheetnote home"><span class="brand-mark" aria-hidden="true">S</span><span>sheetnote</span></a><div class="top-actions"><span class="connection ${isOnline ? "" : "offline"}" role="status"><i></i>${onlineText}</span>${installPrompt ? '<button class="button button-quiet install" type="button">Install</button>' : ""}<button class="button button-quiet auth" type="button" ${!clientId ? "disabled title='Configure VITE_GOOGLE_CLIENT_ID to enable Google Sheets'" : ""}>${signedIn ? "Sign out" : "Sign in with Google"}</button></div></header>
+    <header class="topbar"><a class="brand" href="#" aria-label="Sheetnote home"><span class="brand-mark" aria-hidden="true">S</span><span>sheetnote</span></a><div class="top-actions"><span class="connection ${isOnline ? "" : "offline"}" role="status"><i></i>${onlineText}</span>${installPrompt ? '<button class="button button-quiet install" type="button">Install</button>' : ""}<button class="button button-quiet auth" type="button" ${!clientId ? "disabled title='Configure VITE_GOOGLE_CLIENT_ID to enable Google Sheets'" : ""}>${signedIn ? "Sign out" : signingIn ? "Signing in…" : "Sign in with Google"}</button></div></header>
     <main><section class="intro"><p class="eyebrow">YOUR SHEETS, READY WHEN YOU ARE</p><h1>A quick form for<br class="desktop-break"> the things worth noting.</h1><p class="subhead">Connect a spreadsheet and add entries without opening a grid.</p></section>
     <section class="workspace" aria-label="Sheet entry workspace"><aside class="sidebar"><div class="section-heading"><div><p class="eyebrow">YOUR WORKSPACE</p><h2>Linked sheets</h2></div><span class="count">${links.length}</span></div>
     ${links.length ? `<ul class="link-list">${links.map((item) => `<li><button class="link-item ${item.id === selectedId ? "active" : ""}" type="button" data-select="${escapeHtml(item.id)}" ${writing || loading ? "disabled" : ""}><span class="sheet-icon" aria-hidden="true">▤</span><span class="link-copy"><strong>${escapeHtml(item.spreadsheetTitle)}</strong><small>${escapeHtml(item.tabTitle)}</small></span><span class="arrow" aria-hidden="true">›</span></button><button class="remove" type="button" data-remove="${escapeHtml(item.id)}" aria-label="Remove ${escapeHtml(item.spreadsheetTitle)} — ${escapeHtml(item.tabTitle)}" ${writing ? "disabled" : ""}>×</button></li>`).join("")}</ul>` : `<div class="empty-links"><span class="empty-icon">＋</span><p>No sheets linked yet.</p><small>Add a spreadsheet below to get started.</small></div>`}
@@ -69,26 +71,30 @@ function bind(): void {
 }
 
 async function doSignIn(): Promise<void> {
-  try { await initializeGoogle(clientId); await signIn(); signedIn = true; notice("Signed in. Link a spreadsheet to get started."); }
-  catch (error) { notice(error instanceof Error ? error.message : "Sign in failed. Check your connection and try again.", "error"); }
+  if (signingIn || signedIn) return;
+  signingIn = true; const session = ++sessionGeneration; render();
+  try { await initializeGoogle(clientId); if (session !== sessionGeneration) return; await signIn(); if (session !== sessionGeneration) return; signedIn = true; notice("Signed in. Link a spreadsheet to get started."); }
+  catch (error) { if (session === sessionGeneration) notice(error instanceof Error ? error.message : "Sign in failed. Check your connection and try again.", "error"); }
+  finally { signingIn = false; render(); }
 }
-function doSignOut(): void { signOut(); signedIn = false; notice("Signed out. You can still view saved links; sign in again to refresh or submit."); }
+async function doSignOut(): Promise<void> { const session = ++sessionGeneration; generation++; signedIn = false; data = null; submittedValues = null; loading = false; busyLink = false; status = ""; render(); try { const result = await signOut(); if (session !== sessionGeneration) return; notice(result.revoked ? "Signed out and Google access revoked." : "Signed out locally. Google did not confirm access revocation.", result.revoked ? "success" : "error"); } catch { if (session === sessionGeneration) notice("Signed out locally. Google did not confirm access revocation.", "error"); } }
 async function linkSheet(input: string): Promise<void> {
   if (!isOnline) return notice("Connect to the internet to look up a spreadsheet.", "error");
   const generationAtStart = generation;
+  const sessionAtStart = sessionGeneration;
   if (!signedIn) return notice("Sign in to connect a spreadsheet.", "error");
   busyLink = true; status = ""; render();
   try {
     const id = parseSpreadsheetId(input);
     const info = await getSpreadsheet(id);
-    if (generationAtStart !== generation) return;
+    if (generationAtStart !== generation || sessionAtStart !== sessionGeneration) return;
     if (!info.tabs.length) throw new Error("No tabs were found in this spreadsheet.");
     const tab = info.tabs[0];
     const item: TableLink = { id: `${info.id}:${tab.id}`, spreadsheetId: info.id, spreadsheetTitle: info.title, tabId: tab.id, tabTitle: tab.title };
     const existing = links.find((entry) => entry.id === item.id);
     if (!existing) links.push(item);
     persist(); selectedId = item.id; await loadSelected();
-  } catch (error) { if (generationAtStart === generation) notice(error instanceof Error ? error.message : "Could not find that spreadsheet. Check the URL and your access.", "error"); }
+  } catch (error) { if (generationAtStart === generation && sessionAtStart === sessionGeneration) notice(error instanceof Error ? error.message : "Could not find that spreadsheet. Check the URL and your access.", "error"); }
   finally { busyLink = false; render(); }
 }
 async function selectLink(id: string): Promise<void> { if (writing) return; generation++; selectedId = id; status = ""; setData(null); loading = false; await loadSelected(); }
@@ -118,18 +124,19 @@ async function submitEntry(event: SubmitEvent): Promise<void> {
   if (writing || !isOnline || !data) return;
   const capturedLink = selected(); if (!capturedLink) return;
   const capturedData = data;
+  const sessionAtStart = sessionGeneration;
   const capturedValues = capturedData.headers.map((_, index) => index === capturedData.headers.findIndex((header) => header.trim().toLocaleLowerCase() === "timestamp") ? "" : (app.querySelector<HTMLInputElement>(`#field-${index}`)?.value ?? ""));
   submittedValues = capturedValues;
   writing = true; status = ""; render();
   try {
     await appendEntry(capturedLink.spreadsheetId, capturedLink.tabTitle, capturedValues);
-    if (selectedId !== capturedLink.id) return;
+    if (sessionAtStart !== sessionGeneration || selectedId !== capturedLink.id) return;
     const latest = await getTableData(capturedLink.spreadsheetId, capturedLink.tabTitle);
-    if (selectedId !== capturedLink.id) return;
+    if (sessionAtStart !== sessionGeneration || selectedId !== capturedLink.id) return;
     data = latest; submittedValues = null; status = "Entry saved. Suggestions are up to date."; statusKind = "success";
   } catch (error) {
-    if (selectedId === capturedLink.id) { status = `${error instanceof Error ? error.message : "Could not save your entry."} Your values are still here. Check the sheet before retrying, as the request may have reached Google.`; statusKind = "error"; }
-    if (error instanceof Error && /authentication failed/i.test(error.message)) signedIn = false;
+    if (sessionAtStart === sessionGeneration && selectedId === capturedLink.id) { status = `${error instanceof Error ? error.message : "Could not save your entry."} Your values are still here. Check the sheet before retrying, as the request may have reached Google.`; statusKind = "error"; }
+    if (sessionAtStart === sessionGeneration && error instanceof Error && /authentication failed/i.test(error.message)) { signedIn = false; data = null; submittedValues = null; }
   } finally { writing = false; render(); }
 }
 async function install(): Promise<void> { if (!installPrompt) return; await installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; render(); }

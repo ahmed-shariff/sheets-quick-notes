@@ -4,7 +4,7 @@ declare global {
   interface Window {
     google?: { accounts?: { oauth2?: {
       initTokenClient(options: { client_id: string; scope: string; callback: (response: TokenResponse) => void; error_callback?: (error: { type?: string; message?: string }) => void }): { requestAccessToken(options?: { prompt?: string }): void };
-      revoke(token: string, callback: () => void): void;
+      revoke(token: string, callback: (response?: { successful?: boolean; error?: string }) => void): void;
     } } };
   }
 }
@@ -15,7 +15,7 @@ const GIS_URL = "https://accounts.google.com/gsi/client";
 const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 let clientId = "", tokenClient: { requestAccessToken(options?: { prompt?: string }): void } | undefined, accessToken: string | undefined, tokenExpiresAt = 0;
-let pendingSignIn: (() => void) | undefined, pendingSignInReject: ((error: Error) => void) | undefined, loadScriptPromise: Promise<void> | undefined;
+let pendingSignIn: (() => void) | undefined, pendingSignInReject: ((error: Error) => void) | undefined, loadScriptPromise: Promise<void> | undefined, authGeneration = 0, clientGeneration = 0, initializedGeneration = -1, signInInFlight = false;
 function authError(detail?: string): Error { return new Error(`Google authentication failed${detail ? ` (${detail})` : ""}. Check the OAuth client ID, enable the Google Sheets API, and authorize this account for the spreadsheet.`); }
 function loadGoogleIdentityServices(): Promise<void> {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
@@ -27,21 +27,31 @@ function loadGoogleIdentityServices(): Promise<void> {
   }).catch((error: unknown) => { loadScriptPromise = undefined; throw error; });
   return loadScriptPromise;
 }
+function cancelPendingSignIn(): void { const reject = pendingSignInReject; signInInFlight = false; pendingSignIn = undefined; pendingSignInReject = undefined; reject?.(new Error("Google sign-in was cancelled because authentication was reset.")); }
 export async function initializeGoogle(configuredClientId: string): Promise<void> {
-  clientId = configuredClientId.trim(); if (!clientId) throw new Error("Google OAuth client ID is missing. Configure a browser OAuth client ID before using Google Sheets.");
+  const requestedClientId = configuredClientId.trim(); if (!requestedClientId) throw new Error("Google OAuth client ID is missing. Configure a browser OAuth client ID before using Google Sheets.");
+  if (signInInFlight) { authGeneration++; cancelPendingSignIn(); }
+  const generation = authGeneration, clientEpoch = ++clientGeneration;
+  if (requestedClientId !== clientId) { accessToken = undefined; tokenExpiresAt = 0; }
+  clientId = requestedClientId;
   await loadGoogleIdentityServices();
-  tokenClient = window.google!.accounts!.oauth2!.initTokenClient({ client_id: clientId, scope: SHEETS_SCOPE, callback: (response) => {
+  if (generation !== authGeneration || clientEpoch !== clientGeneration) throw new Error("Google initialization was cancelled by a newer authentication action.");
+  tokenClient = window.google!.accounts!.oauth2!.initTokenClient({ client_id: requestedClientId, scope: SHEETS_SCOPE, callback: (response) => {
+    if (generation !== authGeneration || clientEpoch !== clientGeneration || !signInInFlight) return;
+    signInInFlight = false;
     if (response.error || !response.access_token) pendingSignInReject?.(authError(response.error_description || response.error));
     else { accessToken = response.access_token; tokenExpiresAt = Date.now() + Math.max(0, Number(response.expires_in) || 0) * 1000; pendingSignIn?.(); }
     pendingSignIn = undefined; pendingSignInReject = undefined;
-  }, error_callback: (error) => { pendingSignInReject?.(authError(error.message || error.type)); pendingSignIn = undefined; pendingSignInReject = undefined; } });
+  }, error_callback: (error) => { if (generation !== authGeneration || clientEpoch !== clientGeneration || !signInInFlight) return; signInInFlight = false; pendingSignInReject?.(authError(error.message || error.type)); pendingSignIn = undefined; pendingSignInReject = undefined; } });
+  initializedGeneration = authGeneration;
 }
 export async function signIn(): Promise<void> {
-  if (!clientId || !tokenClient) throw new Error("Google is not initialized. Call initializeGoogle(clientId) first.");
+  if (signInInFlight) throw new Error("Google sign-in is already in progress.");
+  if (!clientId || !tokenClient || initializedGeneration !== authGeneration) throw new Error("Google is not initialized for the current session. Call initializeGoogle(clientId) before signing in.");
   if (accessToken && tokenExpiresAt > Date.now()) return;
-  return new Promise<void>((resolve, reject) => { pendingSignIn = resolve; pendingSignInReject = reject; try { tokenClient!.requestAccessToken({ prompt: "" }); } catch (error) { pendingSignIn = undefined; pendingSignInReject = undefined; reject(authError(error instanceof Error ? error.message : String(error))); } });
+  return new Promise<void>((resolve, reject) => { signInInFlight = true; pendingSignIn = resolve; pendingSignInReject = reject; try { tokenClient!.requestAccessToken({ prompt: "" }); } catch (error) { signInInFlight = false; pendingSignIn = undefined; pendingSignInReject = undefined; reject(authError(error instanceof Error ? error.message : String(error))); } });
 }
-export function signOut(): void { const token = accessToken; accessToken = undefined; tokenExpiresAt = 0; if (token && window.google?.accounts?.oauth2) window.google.accounts.oauth2.revoke(token, () => undefined); }
+export async function signOut(): Promise<{ revoked: boolean }> { const token = accessToken; authGeneration++; clientGeneration++; initializedGeneration = -1; tokenClient = undefined; cancelPendingSignIn(); accessToken = undefined; tokenExpiresAt = 0; if (!token || !window.google?.accounts?.oauth2) return { revoked: false }; return new Promise((resolve) => { let settled = false; const finish = (revoked: boolean) => { if (!settled) { settled = true; clearTimeout(timeout); resolve({ revoked }); } }; const timeout = setTimeout(() => finish(false), 5000); try { window.google!.accounts!.oauth2!.revoke(token, (response) => finish(response?.successful === true)); } catch { finish(false); } }); }
 export function parseSpreadsheetId(input: string): string {
   const value = input.trim(); const match = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/([\w-]+)(?:\/|$)/i.exec(value);
   const id = match?.[1] ?? (value.includes(":") || value.includes("/") ? "" : value);

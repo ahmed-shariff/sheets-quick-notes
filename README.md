@@ -28,7 +28,11 @@ For Android on a LAN, serve the development app from the computer's LAN address 
 3. Create an OAuth client ID of type **Web application**. Add `http://localhost:5173` under Authorized JavaScript origins for local development and the exact deployed HTTPS origin (for example, `https://notes.example.com`) for production. Origins have no path. Add no client secret to this browser application.
 4. Copy the client ID into `.env.local` as `VITE_GOOGLE_CLIENT_ID=...`, then restart Vite. A Google client ID is public configuration, not a secret. Never put a client secret or access token in the repository.
 
-The app requests the `https://www.googleapis.com/auth/spreadsheets` scope. This grants access to spreadsheets the signed-in user can access, including editing their contents; it does not request Drive listing or search permissions. The full Sheets scope may trigger OAuth verification or restricted-scope review when publishing broadly. Requirements and possible personal-use/testing exceptions depend on Google's current policies and distribution; approval or an exemption is not guaranteed. Check current Google OAuth verification guidance before public distribution. This app does not integrate with Notion.
+The app requests the broad `https://www.googleapis.com/auth/spreadsheets` scope. This grants access to spreadsheets the signed-in user can access, including editing their contents; current direct URL/ID linking cannot authorize access per linked sheet. It does not request Drive listing or search permissions. The full Sheets scope may trigger OAuth verification or restricted-scope review when publishing broadly. Requirements and possible personal-use/testing exceptions depend on Google's current policies and distribution; approval or an exemption is not guaranteed. Check current Google OAuth verification guidance before public distribution. This app does not integrate with Notion.
+
+## Content security policy
+
+The static `index.html` applies a practical GIS-compatible CSP. Deployments with additional asset hosts or a host-managed CSP must merge the listed Google endpoints with their policy. A meta CSP cannot set every directive (notably `frame-ancestors` and reporting). Configure `Content-Security-Policy` as an HTTP response header with `frame-ancestors 'none'` (or the deployment's intended embedding policy); `frame-ancestors` is deliberately omitted from the meta policy. The policy permits inline styles for the current UI.
 
 ## Spreadsheet format
 
@@ -44,4 +48,4 @@ Saved links are browser-local metadata. To link another tab, add that tab as a s
 
 ## Verification
 
-`npm run test` exercises spreadsheet ID parsing, header validation, quoted ranges, response parsing and API errors. `npm run build` type-checks and produces the production bundle. No offline submission queue or automatic retry is used; if an append reports an error, inspect the sheet before trying again because Google may have received the request.
+`npm run test` exercises authentication concurrency and callback invalidation, revocation outcomes, spreadsheet ID parsing, header validation, quoted ranges, response parsing and API errors. `npm run build` type-checks and produces the production bundle. No offline submission queue or automatic retry is used; if an append reports an error, inspect the sheet before trying again because Google may have received the request.
