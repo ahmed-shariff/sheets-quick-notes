@@ -5,6 +5,12 @@ const code=await readFile(new URL('../dist/Code.gs',import.meta.url),'utf8');
 for(const text of ['function bootstrap()','function getSpreadsheet(','function readTable(','function appendEntry(','LockService.getScriptLock()','Utilities.formatDate(now, timeZone','getDisplayValues()','setValues']) if(!code.includes(text))throw Error(`Missing server contract: ${text}`);
 const html=await readFile(new URL('../dist/Index.html',import.meta.url),'utf8');
 if(!html.includes('google.script.run')||html.includes('accounts.google.com')) throw Error('Client bridge missing or browser OAuth present.');
+// HtmlService can give phone frames a 980px viewport: keep the same mobile
+// rules available to touch-first devices without relying on that width.
+const mobileQuery = '@media(max-width:720px), (hover:none) and (pointer:coarse){';
+const mobileStart = html.indexOf(mobileQuery);
+const mobileRules = mobileStart < 0 ? '' : html.slice(mobileStart + mobileQuery.length, html.indexOf('@media', mobileStart + mobileQuery.length));
+if (!mobileRules || !mobileRules.includes('.fields{grid-template-columns:1fr;') || !mobileRules.includes('.form-panel{grid-row:1;') || !mobileRules.includes('font-size:16px;min-height:44px')) throw Error('Touch-first mobile layout fallback missing.');
 const start = html.indexOf('<script>'), end = html.indexOf('</script>', start);
 if(start < 0 || end < 0) throw Error('Client script missing.');
 const client = new Script(html.slice(start + '<script>'.length, end), { filename: 'dist/Index.html client' });

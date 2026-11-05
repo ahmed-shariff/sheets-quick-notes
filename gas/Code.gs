@@ -44,6 +44,24 @@ function appendEntry(id, tabId, expectedHeaders, values, timeZone) {
     return { ok: true };
   } finally { lock.releaseLock(); }
 }
+function addColumn(id, tabId, expectedHeaders, name) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) throw new Error('Another save is in progress. Try again.');
+  try {
+    const sheet = sheet_(id, tabId);
+    if (!Array.isArray(expectedHeaders) || expectedHeaders.length < 1 || expectedHeaders.length > 100 || expectedHeaders.some(v => typeof v !== 'string' || v.length > 500)) throw new Error('Invalid headers.');
+    if (typeof name !== 'string' || name.trim().length === 0 || name.trim().length > 500) throw new Error('Column name must be nonblank and at most 500 characters.');
+    const width = sheet.getLastColumn(), actual = width ? sheet.getRange(1, 1, 1, width).getDisplayValues()[0] : [];
+    validateHeaders_(actual);
+    if (JSON.stringify(actual) !== JSON.stringify(expectedHeaders)) throw new Error('Sheet headers changed. Refresh before adding a column.');
+    const newName = name.trim();
+    if (actual.some(h => h.trim().toLowerCase() === newName.toLowerCase())) throw new Error('Column names must be unique.');
+    if (actual.length >= 100) throw new Error('A sheet can have at most 100 columns.');
+    if (sheet.getMaxColumns() < actual.length + 1) sheet.insertColumnsAfter(sheet.getMaxColumns(), actual.length + 1 - sheet.getMaxColumns());
+    sheet.getRange(1, actual.length + 1).setValue("'" + newName);
+    return { headers: actual.concat([newName]) };
+  } finally { lock.releaseLock(); }
+}
 function sheet_(id, tabId) {
   if (!Number.isInteger(tabId) || tabId < 0) throw new Error('Invalid tab ID.');
   const sheet = SpreadsheetApp.openById(validId_(id)).getSheets().find(s => s.getSheetId() === tabId);
@@ -52,4 +70,4 @@ function sheet_(id, tabId) {
 function validateHeaders_(h) {
   if (!h.length || h.length > 100 || h.some(x => !x.trim()) || new Set(h.map(x => x.trim().toLowerCase())).size !== h.length || h.filter(x => x.trim().toLowerCase() === 'timestamp').length !== 1) throw new Error('Headers must be nonblank and unique, with exactly one Timestamp.');
 }
-function doGet() { return HtmlService.createTemplateFromFile('Index').evaluate().setTitle('Sheetnote'); }
+function doGet() { return HtmlService.createTemplateFromFile('Index').evaluate().setTitle('Sheetnote').addMetaTag('viewport', 'width=device-width, initial-scale=1'); }
